@@ -1,0 +1,37 @@
+name: Validate with hassfest
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      # checked out under source/ rather than the workspace root, so the
+      # repo's own root-level manifest.json isn't also visible to hassfest's
+      # scan below (it would otherwise get picked up as a second, bogus
+      # "integration" alongside the real staged copy).
+      - uses: actions/checkout@v4
+        with:
+          path: source
+
+      # hacs.json declares content_in_root (the integration's files live at
+      # the repo root, not under custom_components/<domain>/), but hassfest
+      # expects the standard layout - stage a throwaway copy so it can find
+      # and validate manifest.json correctly. hassfest scans recursively, so
+      # source/ is removed afterward - otherwise its own nested manifest.json
+      # would get picked up as a second, bogus "integration" too.
+      - name: Stage into custom_components/madoka for hassfest
+        run: |
+          mkdir -p custom_components/madoka
+          cp source/__init__.py source/climate.py source/config_flow.py \
+             source/const.py source/decoder.py source/framer.py \
+             source/protocol.py source/helpers.py source/manifest.json \
+             source/strings.json custom_components/madoka/
+          cp -r source/translations custom_components/madoka/
+          rm -rf source
+
+      - uses: home-assistant/actions/hassfest@master

@@ -1,0 +1,12 @@
+{
+  "domain": "madoka",
+  "name": "Madoka",
+  "codeowners": ["@isakLevinson"],
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "documentation": "https://github.com/isakLevinson/madoka",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/isakLevinson/madoka/issues",
+  "requirements": ["dbus-fast>=1.83.0"],
+  "version": "0.3.1"
+}

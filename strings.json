@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Madoka",
+        "description": "Add your Madoka-controlled air conditioners as a list of devices.",
+        "data": {
+          "devices": "Devices"
+        },
+        "data_description": {
+          "devices": "YAML list of devices, e.g. `[{name: Living Room, mac: AA:BB:CC:DD:EE:FF, modes: [off, cool, heat]}]`. `modes` is optional and defaults to `[off, cool, heat]`; use `[off, auto]` for units that only support power on/off (no cool/heat selection)."
+        }
+      }
+    },
+    "error": {
+      "invalid_devices": "Could not parse the devices list. Check the Home Assistant log for details."
+    },
+    "abort": {
+      "single_instance_allowed": "Only one Madoka integration instance is allowed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Madoka",
+        "description": "Edit your configured devices.",
+        "data": {
+          "devices": "Devices"
+        },
+        "data_description": {
+          "devices": "YAML list of devices, e.g. `[{name: Living Room, mac: AA:BB:CC:DD:EE:FF, modes: [off, cool, heat]}]`. `modes` is optional and defaults to `[off, cool, heat]`; use `[off, auto]` for units that only support power on/off (no cool/heat selection)."
+        }
+      }
+    },
+    "error": {
+      "invalid_devices": "Could not parse the devices list. Check the Home Assistant log for details."
+    }
+  },
+  "issues": {
+    "pairing_required": {
+      "title": "{name} needs pairing confirmed",
+      "description": "This is a notification from your Madoka air conditioner, \"{name}\". Check the unit's display for a pairing code and confirm it there. This clears automatically once it connects."
+    }
+  }
+}
