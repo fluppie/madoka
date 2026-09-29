@@ -62,6 +62,11 @@ Each device needs a `name` and `mac`. `modes` is optional and defaults to
   leaves whatever mode is already set on the device untouched. Temperature
   and fan speed are still fully controllable.
 
+`pairing_timeout` is also optional and defaults to `60` (seconds) — how long
+to wait for you to confirm the pairing code on the unit's display before
+giving up on that attempt. Raise it per-device if a unit's screen is slow to
+show the prompt or you need more time to reach it.
+
 Only one Madoka config entry is supported; all of your devices live in that
 single entry.
 

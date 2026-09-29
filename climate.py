@@ -13,7 +13,7 @@ from homeassistant.components.climate.const import (
 
 import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
-from .const import DOMAIN, ALLOWED_MODES, DEFAULT_MODES
+from .const import DOMAIN, ALLOWED_MODES, DEFAULT_MODES, DEFAULT_PAIRING_TIMEOUT
 from .madoka import Madoka
 from .helpers import format_hex, log_context, log_debug, log_trace, log_info, log_warning, log_error, log_exception
 
@@ -23,6 +23,7 @@ logger.propagate = True
 CONF_NAME    = "name"
 CONF_MAC     = "mac"
 CONF_MODES   = "modes"
+CONF_PAIRING_TIMEOUT = "pairing_timeout"
 
 MAX_OFFLINE_COUNT = 3
 
@@ -51,16 +52,21 @@ async def async_setup_entry(hass, entry, async_add_entities):
     devices = []
     macList = []
 
-    for dev in entry_devices:
+    for idx, dev in enumerate(entry_devices):
         name = dev.get(CONF_NAME)
         mac = dev.get(CONF_MAC)
         modes = dev.get(CONF_MODES, DEFAULT_MODES)
         if not isinstance(modes, list) or "off" not in modes or any(m not in ALLOWED_MODES for m in modes):
             log_warning(logger, f'{name}: invalid modes {modes!r}, falling back to {DEFAULT_MODES}')
             modes = DEFAULT_MODES
+
+        pairing_timeout = dev.get(CONF_PAIRING_TIMEOUT, DEFAULT_PAIRING_TIMEOUT)
+        if isinstance(pairing_timeout, bool) or not isinstance(pairing_timeout, (int, float)) or pairing_timeout <= 0:
+            log_warning(logger, f'{name}: invalid pairing_timeout {pairing_timeout!r}, falling back to {DEFAULT_PAIRING_TIMEOUT}')
+            pairing_timeout = DEFAULT_PAIRING_TIMEOUT
         #logger.info(f'name: {name}, mac:{mac}')
 
-        myac = MyAC(name, mac, modes, hass)
+        myac = MyAC(name, mac, modes, hass, pairing_timeout=pairing_timeout, bootstrap_order=idx)
         devices.append(myac)
         macList.append(mac)
 
@@ -76,14 +82,16 @@ class MyAC(ClimateEntity):
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL, HVACMode.HEAT, HVACMode.AUTO]
     _attr_fan_modes = [FAN_LOW, FAN_MEDIUM, FAN_HIGH]
 
-    def __init__(self, name: str, mac: str, modes, hass=None):
-        log_info(logger, f'MyAC __init__ {name} {mac} modes:{modes}', self)
+    def __init__(self, name: str, mac: str, modes, hass=None, pairing_timeout=DEFAULT_PAIRING_TIMEOUT, bootstrap_order=0):
+        log_info(logger, f'MyAC __init__ {name} {mac} modes:{modes} pairing_timeout:{pairing_timeout} bootstrap_order:{bootstrap_order}', self)
 
         self._madoka = Madoka(
             name,
             mac,
             connect_cb = self.madoka_connect_cb,
             hass = hass,
+            pairing_timeout = pairing_timeout,
+            bootstrap_order = bootstrap_order,
         )
 
         self._hass = hass
@@ -118,7 +126,7 @@ class MyAC(ClimateEntity):
     def set_online(self, online: bool):
         if online:
             if self._offline_count >= MAX_OFFLINE_COUNT:
-                log_warning(logger, f'reconnected', self)
+                log_info(logger, f'reconnected', self)
             self._offline_count = 0
         else:
             self._offline_count += 1

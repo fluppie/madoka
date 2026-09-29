@@ -11,6 +11,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CONF_DEVICES = "devices"
 CONF_MODES   = "modes"
+CONF_PAIRING_TIMEOUT = "pairing_timeout"
 
 def _unyaml_bool(m):
     # The frontend's YAML/object editor follows YAML 1.1, where unquoted
@@ -43,6 +44,13 @@ def validate_devices(value) -> list:
                 raise vol.Invalid(
                     f"'modes' for {dev.get('name')} must be a list containing 'off' "
                     f"and only values from {ALLOWED_MODES}"
+                )
+
+        pairing_timeout = dev.get(CONF_PAIRING_TIMEOUT)
+        if pairing_timeout is not None:
+            if isinstance(pairing_timeout, bool) or not isinstance(pairing_timeout, (int, float)) or pairing_timeout <= 0:
+                raise vol.Invalid(
+                    f"'pairing_timeout' for {dev.get('name')} must be a positive number of seconds"
                 )
     return value
 

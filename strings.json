@@ -38,7 +38,7 @@
   },
   "issues": {
     "pairing_required": {
-      "title": "{name} needs pairing confirmed",
+      "title": "{name} air conditioner needs pairing confirmed",
       "description": "This is a notification from your Madoka air conditioner, \"{name}\". Check the unit's display for a pairing code and confirm it there. This clears automatically once it connects."
     }
   }
