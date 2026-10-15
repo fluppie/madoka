@@ -61,6 +61,67 @@ def mul128(v):
 def to_int(v):
     return int(v)
 
+# Temperature byte encoding of the controller:
+# 0xFF / 0x7F mean "no sensor / not available", anything above 126 is a
+# negative reading encoded as 128 - v (0x83 -> -3), otherwise the plain value.
+def temp_decode(v):
+    if v in (0xFF, 0x7F):
+        return None
+    if v > 126:
+        return 128 - v
+    return v
+
+
+# ---- raw-bytes decoders (used with size 0 in parseTable, see Decoder.parse)
+
+def _u32le_list(raw):
+    """Split raw bytes into uint32 little-endian values (per 4-byte group)."""
+    return [int.from_bytes(raw[i:i + 4], "little") for i in range(0, len(raw) - len(raw) % 4, 4)]
+
+
+# Energy consumption (cmd 0x120): a list of uint32 LE in 0.1 kWh, first
+# entry is the period total, the rest the per-slot breakdown
+# (daily: 12 x 2h slots, weekly: 7 days sun..sat, yearly: 12 months).
+def energy_decode(raw):
+    vals = _u32le_list(raw)
+    if not vals:
+        return None
+    return {"total": vals[0] / 10, "slots": [v / 10 for v in vals[1:]]}
+
+
+# Operation hours (cmd 0x112): uint32 LE hours, 0xFFFFFFFF = not available.
+def hours_decode(raw):
+    vals = _u32le_list(raw)
+    if not vals or vals[0] == 0xFFFFFFFF:
+        return None
+    return vals[0]
+
+
+# Current error code (cmd 0x100 type 0x90/0x91): [unit][ascii][ascii][number]
+# -> e.g. "U4-01"; all-zero / wrong length means no error.
+def error_code_decode(raw):
+    if len(raw) != 4:
+        return None
+    unit, c1, c2, num = raw
+    if c1 == 0 and c2 == 0:
+        return None
+    try:
+        code = f"{chr(c1)}{chr(c2)}-{num:02d}"
+    except ValueError:
+        return None
+    return {"unit": unit, "code": code}
+
+
+# Model info (cmd 0x130 type 0x41): ASCII, NUL padded; may hold indoor and
+# outdoor model names. Return the printable string.
+def ascii_decode(raw):
+    return bytes(raw).split(b"\x00")[0].decode("ascii", errors="replace").strip() or None
+
+
+def version_decode(raw):
+    return ".".join(str(b) for b in raw) if raw else None
+
+
 class MapDecode:
     def __init__(self, m):
         self.m = m
@@ -107,13 +168,61 @@ parseTable = {
         0x20: ("cool_fan", 1, MapDecode(fan_map), MapEncode(rev_fan_map, default=0)),
         0x21: ("heat_fan", 1, MapDecode(fan_map), MapEncode(rev_fan_map, default=0)),
     },
+    # notifications - bit flags, decoded into individual flags by the
+    # binary_sensor platform (see NOTIFICATION_BITS below)
     0x100: {
+        0x40: ("notif_general", 1, ident, to_int),
+        0x41: ("notif_special", 1, ident, to_int),
+        0x42: ("notif_onoff", 1, ident, to_int),
+        0x50: ("notif_errors", 1, ident, to_int),
+        0x61: ("notif_schedule", 1, ident, to_int),
         0x62: ("clean_filter", 1, ident, to_int),
-    }, 
+        0x90: ("error_code", 0, error_code_decode, ident),
+    },
     0x110: {
-        0x40: ("temp_indoor", 1, ident, ident),
-        0x41: ("temp_outdoor",1, ident, ident),
-    }
+        0x40: ("temp_indoor", 1, temp_decode, ident),
+        0x41: ("temp_outdoor",1, temp_decode, ident),
+    },
+    # operation hours; the request must carry the unit number (type 0x02)
+    0x112: {
+        0x02: ("unit_number", 1, ident, to_int),
+        0x40: ("hours_indoor", 0, hours_decode, ident),
+        0x41: ("hours_indoor_fan", 0, hours_decode, ident),
+        0x42: ("hours_indoor_power", 0, hours_decode, ident),
+        0x43: ("hours_outdoor", 0, hours_decode, ident),
+        0x44: ("hours_outdoor_fan1", 0, hours_decode, ident),
+        0x45: ("hours_outdoor_fan2", 0, hours_decode, ident),
+        0x46: ("hours_compressor1", 0, hours_decode, ident),
+        0x47: ("hours_compressor2", 0, hours_decode, ident),
+    },
+    # energy consumption - each is a large multi-chunk response, request
+    # them one at a time (a combined response would exceed one frame)
+    0x120: {
+        0x40: ("energy_today", 0, energy_decode, ident),
+        0x41: ("energy_yesterday", 0, energy_decode, ident),
+        0x42: ("energy_this_week", 0, energy_decode, ident),
+        0x43: ("energy_last_week", 0, energy_decode, ident),
+        0x44: ("energy_this_year", 0, energy_decode, ident),
+        0x45: ("energy_last_year", 0, energy_decode, ident),
+    },
+    0x130: {
+        # field names are looked up by name across the whole table when
+        # encoding, so this one must not clash with 0x112's unit_number
+        0x02: ("info_unit_number", 1, ident, to_int),
+        0x41: ("model_info", 0, ascii_decode, ident),
+        0x45: ("fw_version", 0, version_decode, ident),
+        0x46: ("ble_version", 0, version_decode, ident),
+    },
+}
+
+# bit layout of the 0x100 notification bytes
+NOTIFICATION_BITS = {
+    "notif_general": {0: "centralized_control", 1: "forced_thermo_off", 2: "backup_operation", 3: "commissioning"},
+    "notif_special": {0: "quick_start", 1: "test_operation", 2: "defrost_hot_start", 3: "duty_rotation"},
+    "notif_onoff":   {0: "setback_active"},
+    "notif_errors":  {0: "error", 1: "warning", 2: "alarm", 4: "refrigerant_leak"},
+    "notif_schedule": {0: "schedule_enabled", 1: "holiday_enabled"},
+    "clean_filter":  {0: "clean_filter", 1: "clean_element", 2: "self_cleaning_filter", 3: "replace_dustbox", 4: "replace_filter"},
 }
 
 class Decoder:
@@ -138,13 +247,16 @@ class Decoder:
                 var_name, s, f1, f2 = table[t]
                 if logger.isEnabledFor(TRACE_LEVEL):
                     logger.trace(f"{context}name: {var_name}")
-                # validate val has expected size before int.from_bytes
                 try:
-                    v = int.from_bytes(val, byteorder="big")
+                    if s == 0:
+                        # raw-bytes field: decoder gets the value bytes as-is
+                        state[var_name] = f1(bytes(val))
+                    else:
+                        v = int.from_bytes(val, byteorder="big")
+                        state[var_name] = f1(v)
                 except Exception:
                     logger.exception(f"{context}failed to parse value for cmd:{cmd:x} type:{t:x}")
                     continue
-                state[var_name] = f1(v)
                 #logger.info(f"var_name: {var_name} val:{state[var_name]}")
 
         # state is a dict; empty state is acceptable (no matching types)
@@ -165,8 +277,9 @@ class Decoder:
                         translated = int(f2(val))
                         if logger.isEnabledFor(TRACE_LEVEL):
                             logger.trace(f'{context}found {n} cmd:{cmd:x} k:{k:x} val:{format_hex(val)} ({translated})')
-                        #val_int = int(val)
-                        data[cmd+keyOffset].append((k, bytearray(translated.to_bytes(s, "big")) ))
+                        # raw-bytes (size 0) fields are read-only; a read
+                        # request still carries a 1-byte zero value
+                        data[cmd+keyOffset].append((k, bytearray(translated.to_bytes(max(s, 1), "big")) ))
                         break;
 
         data = dict(data)

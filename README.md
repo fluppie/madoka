@@ -8,7 +8,15 @@ bridge. Each controller is exposed as a `climate` entity.
 
 - Power on/off, and (per unit) cool/heat mode selection
 - Target temperature and fan speed (low/medium/high) control
-- Filter-needs-cleaning exposed as an entity attribute
+- Filter-needs-cleaning exposed as an entity attribute and a binary sensor
+- Outdoor temperature sensor (with correct negative values / "no sensor")
+- Energy consumption sensors (today, yesterday, this week, this year, in
+  kWh; the 2-hour / per-day / per-month breakdown is in the attributes)
+- Operation hours (indoor unit, indoor fan, outdoor unit, compressor)
+- Current error code plus error / warning / alarm binary sensors
+- Status binary sensors: setback active, defrost/hot start, schedule
+  enabled, centralized control, filter/element/dust box maintenance flags
+- Model name and firmware / BLE version (diagnostic)
 - Automatic BLE reconnect with connection/offline tracking
 - Failed writes (e.g. a dropped BLE command) are kept pending and retried
   automatically on the next poll, instead of silently reverting in the UI
@@ -144,6 +152,26 @@ python3 -m unittest discover -v
 a real BLE connection (the notification queue, thread safety for BLE
 callbacks, response-timeout handling) and isn't covered by tests, since that
 part inherently needs a running event loop rather than being pure logic.
+
+## Sensors and the BLE protocol
+
+All entities of one controller are grouped under a single device. The
+climate entity is the only poller: every poll it reads the climate state
+plus the notification flags, outdoor temperature and error code in one
+round-trip; every 10th poll it also reads energy consumption and operation
+hours, and every 120th poll the model/firmware info. Entities for functions
+the unit doesn't answer for (e.g. energy on units without metering) stay
+`unavailable` and are not polled again.
+
+Protocol functions and value encodings used by the new entities:
+
+| function | used for |
+|---|---|
+| `0x100` notifications | error/warning/alarm bits, filter flags, setback, schedule, current error code |
+| `0x110` sensor information | indoor / outdoor temperature (`0xFF`/`0x7F` = none, `>126` = `128 - v`) |
+| `0x112` operation hours | uint32 LE hours per component |
+| `0x120` energy consumption | uint32 LE in 0.1 kWh: total + per-slot breakdown |
+| `0x130` maintenance information | model name, firmware and BLE version |
 
 ## Limitations
 

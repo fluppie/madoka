@@ -13,7 +13,9 @@ from homeassistant.components.climate.const import (
 
 import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
-from .const import DOMAIN, ALLOWED_MODES, DEFAULT_MODES, DEFAULT_PAIRING_TIMEOUT
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.entity import DeviceInfo
+from .const import DOMAIN, ALLOWED_MODES, DEFAULT_MODES, DEFAULT_PAIRING_TIMEOUT, signal_update, device_info
 from .madoka import Madoka
 from .helpers import format_hex, log_context, log_debug, log_trace, log_info, log_warning, log_error, log_exception
 
@@ -26,6 +28,31 @@ CONF_MODES   = "modes"
 CONF_PAIRING_TIMEOUT = "pairing_timeout"
 
 MAX_OFFLINE_COUNT = 3
+
+# the climate entity is the one HA polls (async_update); extra, slow-changing
+# data for the sensor/binary_sensor platforms is read from the same
+# connection every N-th poll and pushed to those entities via the
+# dispatcher, so there's only ever one poller per device
+SLOW_POLL_EVERY = 10      # energy / operation hours: every 10th update (~10 min)
+INFO_POLL_EVERY = 120     # model / firmware info: every 120th update
+UNSUPPORTED_AFTER = 2     # give up on a read after this many empty responses
+
+# fields read every cycle, in one round-trip with the climate state
+FAST_READ = {"power":0, "mode":0, "temp_indoor":0, "temp_outdoor":0, "cooling":0, "heating":0,
+             "cool_fan":0, "heat_fan":0, "clean_filter":0, "notif_general":0, "notif_special":0,
+             "notif_onoff":0, "notif_errors":0, "notif_schedule":0, "error_code":0}
+
+# slow reads, each its own round-trip (energy responses are multi-chunk and
+# too large to combine into one frame)
+SLOW_READS = {
+    "energy_today":     {"energy_today":0},
+    "energy_yesterday": {"energy_yesterday":0},
+    "energy_this_week": {"energy_this_week":0},
+    "energy_this_year": {"energy_this_year":0},
+    "hours":            {"unit_number":0, "hours_indoor":0, "hours_indoor_fan":0, "hours_indoor_power":0,
+                         "hours_outdoor":0, "hours_outdoor_fan1":0, "hours_compressor1":0, "hours_compressor2":0},
+}
+INFO_READ = {"info_unit_number":0, "model_info":0, "fw_version":0, "ble_version":0}
 
 # per-device-mode field names, and the HVACMode <-> device-mode-string mapping.
 # Centralized here since both were previously duplicated across several
@@ -105,6 +132,10 @@ class MyAC(ClimateEntity):
         self._filter_needs_clean = False
         self._mode = ""
         self._pending_write = {}
+        self._attr_device_info = device_info(mac, name)
+        self._poll_count = 0
+        self._shared_state = {}          # last values pushed to sensor platforms
+        self._unsupported = {}           # read-name -> empty-response count
 
         self._attr_temperature_unit = "°C"  # correct
         self._attr_hvac_modes = modes
@@ -133,6 +164,33 @@ class MyAC(ClimateEntity):
             log_warning(logger, f'offline_count:{self._offline_count}', self)
 
         self.async_write_ha_state()
+        self._push_shared({"online": online})
+
+
+    def _push_shared(self, values: dict):
+        """Merge values into the shared per-device state and notify the
+        sensor / binary_sensor entities of this device."""
+        self._shared_state.update(values)
+        if self._hass is not None:
+            async_dispatcher_send(self._hass, signal_update(self._mac), dict(self._shared_state))
+
+
+    async def _read_slow(self, name, req):
+        """One slow read (energy / hours / info); stops asking after
+        UNSUPPORTED_AFTER consecutive empty responses, since not every
+        unit supports every function."""
+        if self._unsupported.get(name, 0) >= UNSUPPORTED_AFTER:
+            return
+        rsp = await self._madoka.device_command({"read": req})
+        rsp = {k: v for k, v in rsp.items() if k in req and not k.endswith("unit_number")}
+        if not rsp:
+            self._unsupported[name] = self._unsupported.get(name, 0) + 1
+            if self._unsupported[name] >= UNSUPPORTED_AFTER:
+                log_info(logger, f'{name}: no response {UNSUPPORTED_AFTER}x, assuming unsupported - not polling it anymore', self)
+            return
+        self._unsupported[name] = 0
+        log_debug(logger, f'{name}: {rsp}', self)
+        self._push_shared(rsp)
 
 
     def set_filter_status(self, needs_clean: bool):
@@ -236,7 +294,7 @@ class MyAC(ClimateEntity):
             log_info(logger, f'retrying pending write {key}={value}', self)
             await self._write_pending(key, value)
 
-        req = {"read":{"power":0, "mode":0, "temp_indoor":0, "cooling":0, "heating":0, "cool_fan":0, "heat_fan":0, "clean_filter":0} }
+        req = {"read": dict(FAST_READ)}
 
         rsp = await self._madoka.device_command(req)
         log_info(logger, f'async_update rsp: {rsp}', self)
@@ -280,4 +338,16 @@ class MyAC(ClimateEntity):
 
         clean_filter = rsp.get("clean_filter")
         if clean_filter is not None:
-            self.set_filter_status(False if (clean_filter==0) else True)
+            # bit 0 = clean filter; the other bits (clean element, replace
+            # dustbox/filter, ...) are exposed as binary_sensors
+            self.set_filter_status(bool(clean_filter & 1))
+
+        # hand everything the sensor platforms care about over to them
+        self._push_shared({k: v for k, v in rsp.items() if k in FAST_READ})
+
+        self._poll_count += 1
+        if self._poll_count % SLOW_POLL_EVERY == 1:
+            for name, slow_req in SLOW_READS.items():
+                await self._read_slow(name, slow_req)
+        if self._poll_count % INFO_POLL_EVERY == 1:
+            await self._read_slow("info", INFO_READ)

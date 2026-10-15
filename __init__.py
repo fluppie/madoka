@@ -2,7 +2,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 import logging
 from . import pairing_agent
-from .const import DOMAIN
+from .const import DOMAIN, PLATFORMS
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ async def async_setup_entry(hass, entry):
     entry.async_on_unload(entry.add_update_listener(async_update_listener))
 
     # Forward setup to the climate platform
-    await hass.config_entries.async_forward_entry_setups(entry, ["climate"])
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
@@ -45,7 +45,7 @@ async def async_update_listener(hass: HomeAssistant, entry: ConfigEntry):
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Handle removal."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, ["climate"])
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
 
